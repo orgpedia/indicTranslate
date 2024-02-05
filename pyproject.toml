@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "indictranslate"
+version = "0.1.0"
+description = "Translate Indian languages to English and vice-versa"
+authors = ["mukundesh <mukundesh@outlook.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+transformers = "^4.37.2"
+indictranstokenizer = {git = "https://github.com/orgpedia/IndicTransTokenizer.git"}
+ruff = "^0.2.0"
+more-itertools = "^10.2.0"
+pysbd = "^0.3.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
