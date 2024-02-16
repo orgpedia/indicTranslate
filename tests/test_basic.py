@@ -1,4 +1,4 @@
-from indicTranslate import Translator
+from indictranslate import Translator
 from pathlib import Path
 
 import tempfile

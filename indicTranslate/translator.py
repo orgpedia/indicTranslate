@@ -11,7 +11,10 @@ import yaml
 
 import pysbd
 
-DefaultModel = "ai4bharat/indictrans2-en-indic-dist-200M"
+DefaultModelEn2Indic = "ai4bharat/indictrans2-en-indic-dist-200M"
+DefaultModelIndic2En = "ai4bharat/indictrans2-indic-en-dist-200M"
+
+
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 """
@@ -88,7 +91,7 @@ NumbersDict = {
 class Translator:
     def __init__(
         self,
-        model_name_or_path=DefaultModel,
+        model_name_or_path="default",
         src_lang="eng_Latn",
         tgt_lang="hin_Deva",
         glossary_path=None,
@@ -98,12 +101,30 @@ class Translator:
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
 
-        self.tokenizer = IndicTransTokenizer(direction="en-indic")
+        if self.src_lang != "eng_Latn" and self.tgt_lang != "eng_Latn":
+            raise ValueError("One of the languages (src/tgt) has to be English")
+
+        if self.src_lang not in FloresIsoCodes:
+            raise ValueError("Unknown language {self.src_lang}")
+
+        if self.tgt_lang not in FloresIsoCodes:
+            raise ValueError("Unknown language {self.tgt_lang}")
+
         self.processor = IndicProcessor(inference=True)
         if glossary_path:
             self.glossary = self.load_glossary(glossary_path)
         else:
             self.glossary = None
+
+        if model_name_or_path == "default":
+            if self.src_lang == "eng_Latn":
+                self.tokenizer = IndicTransTokenizer(direction="en-indic")
+                model_name_or_path = DefaultModelEn2Indic
+            else:
+                self.tokenizer = IndicTransTokenizer(direction="indic-en")
+                model_name_or_path = DefaultModelIndic2En
+
+        print(f"src_lang: {self.src_lang} tgt_lang: {self.tgt_lang} {model_name_or_path}")
 
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
             model_name_or_path, trust_remote_code=True

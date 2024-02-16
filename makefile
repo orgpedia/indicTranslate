@@ -28,7 +28,7 @@ test_install:
 	poetry install --only=test
 
 test: test_install format lint
-	poetry run pytest -s
+	poetry run pytest
 
 
 test_run:
