@@ -5,6 +5,10 @@ description = "Translate Indian languages to English and vice-versa"
 authors = ["mukundesh <mukundesh@outlook.com>"]
 license = "MIT"
 readme = "README.md"
+packages = [
+    { include = "indictranslate" },
+]
+
 
 [tool.poetry.dependencies]
 python = ">=3.8 <4.0"
