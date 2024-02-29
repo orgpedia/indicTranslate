@@ -10,6 +10,7 @@ from indicnlp.tokenize.sentence_tokenize import DELIM_PAT_NO_DANDA, sentence_spl
 import yaml
 
 import pysbd
+import resource
 
 DefaultModelEn2Indic = "ai4bharat/indictrans2-en-indic-dist-200M"
 DefaultModelIndic2En = "ai4bharat/indictrans2-indic-en-dist-200M"
@@ -19,8 +20,6 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 """
 TODO - WHAT IS NEEDED ? NOT HOW?
-1. Glossary of ready made translations so we can just skip those sentences from being translated
-2. Add a way to translate numbers/dates easily so that we can skip those from the list
 3. Add way to auto detect the languge and corresponding set src and target languages.
 4. Add a way to save intermediate translations, needed for large scale translations.
 5. Batching: 1) saving intermediate results and manage memory 2) maximize the GPU loading.
@@ -88,6 +87,11 @@ NumbersDict = {
 }
 
 
+def memory_usage():
+    mem_MB = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024.0 * 1024.0)
+    return f"{mem_MB:,.0f} MB"
+
+
 class Translator:
     def __init__(
         self,
@@ -115,7 +119,6 @@ class Translator:
             self.glossary = self.load_glossary(glossary_path)
         else:
             self.glossary = None
-
         if model_name_or_path == "default":
             if self.src_lang == "eng_Latn":
                 self.tokenizer = IndicTransTokenizer(direction="en-indic")
@@ -124,11 +127,17 @@ class Translator:
                 self.tokenizer = IndicTransTokenizer(direction="indic-en")
                 model_name_or_path = DefaultModelIndic2En
 
+        self.max_batch_words = 1024 if self.src_lang == 'eng_Latn' else 256
+
         print(f"src_lang: {self.src_lang} tgt_lang: {self.tgt_lang} {model_name_or_path}")
 
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_name_or_path, trust_remote_code=True
-        )
+        # will initialize it JIT
+        self.model = None
+        self.model_name_or_path = model_name_or_path
+
+        # self.model = AutoModelForSeq2SeqLM.from_pretrained(
+        #     model_name_or_path, trust_remote_code=True
+        # )
 
         if enable_numeric:
             src_str = numeric_passthrough + NumbersDict[src_lang]
@@ -159,11 +168,9 @@ class Translator:
         assert self.trans_dict
         return text.translate(self.trans_dict)
 
-    def _translate_sentences(self, sentences):
+    def _translate_cpu_sentences(self, sentences):
         if not sentences:
             return []
-
-        self.load_model()
 
         sentences = self.processor.preprocess_batch(
             sentences, src_lang=self.src_lang, tgt_lang=self.tgt_lang
@@ -177,15 +184,59 @@ class Translator:
             return_tensors="pt",
             return_attention_mask=True,
         ).to(DEVICE)
+        num_tokens = len(inputs["input_ids"]) * len(inputs["input_ids"][0])
+        print(f"Before generate: {memory_usage()} num_tokens: {num_tokens}")
 
         with torch.inference_mode():
             outputs = self.model.generate(
-                **inputs, num_beams=5, num_return_sequences=1, max_length=256
+                **inputs, num_beams=3, num_return_sequences=1, max_length=256
             )
+
+        print(f"After generate: {memory_usage()}")
 
         outputs = self.tokenizer.batch_decode(outputs, src=False)
         outputs = self.processor.postprocess_batch(outputs, lang=self.tgt_lang)
         return outputs
+
+    def _translate_sentences(self, sentences):
+        def sentence_len(pair_sent):
+            return len(pair_sent[1])
+
+        if not sentences:
+            return []
+
+        # bring short sentences first, this reduces the tensor sizes
+        sorted_pair_sentences = sorted(enumerate(sentences), key=sentence_len)
+
+        # delayed loading of the model, only if it is needed
+        self.load_model()
+
+        batch_idxs, batch_sentences, batch_words, batch_idx = [], [], 0, 0
+        output_sentences = [""] * len(sentences)
+        for idx, sentence in sorted_pair_sentences:
+            batch_words += len(sentence.split())
+            batch_idxs.append(idx)
+            batch_sentences.append(sentence)
+
+            # Batch the number of sentences based on the words, rough proxy for tokens
+            # no point keeping ready tensors in memory
+            if batch_words > self.max_batch_words:
+                print(f"\t[{batch_idx}]  #words: {batch_words} #sentences: {len(batch_sentences)}")
+                output_batch = self._translate_cpu_sentences(batch_sentences)
+                for idx, output_batch_sentence in zip(batch_idxs, output_batch):
+                    output_sentences[idx] = output_batch_sentence
+                batch_idxs.clear()
+                batch_sentences.clear()
+                batch_words = 0
+                batch_idx += 1
+
+        if batch_sentences:
+            print(f"\t[{batch_idx}]  #words: {batch_words} #sentences: {len(batch_sentences)}")
+            output_batch = self._translate_cpu_sentences(batch_sentences)
+            for idx, output_batch_sentence in zip(batch_idxs, output_batch):
+                output_sentences[idx] = output_batch_sentence
+
+        return output_sentences
 
     def translate_sentences(self, sentences):
         def short_translate_sentence(sentence):
@@ -287,7 +338,7 @@ def main():
         input_file = Path(input)
         output_file = input_file.parent / f"{input_file.stem}.trans{input_file.suffix}"
         translator.translate_file(input_file, output_file)
-        print(output_file.read_text())
+        # print(output_file.read_text())
     else:
         input_sentence = input
         output_sentences = translator.translate_paragraphs([input_sentence])
